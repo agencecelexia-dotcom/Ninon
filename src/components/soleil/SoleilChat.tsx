@@ -66,7 +66,14 @@ export function SoleilChat() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error ${response.status}`);
+        let errorDetail = `HTTP ${response.status}`;
+        try {
+          const errBody = await response.json();
+          if (errBody.error) errorDetail = errBody.error;
+        } catch {
+          // not JSON
+        }
+        throw new Error(errorDetail);
       }
 
       const reader = response.body?.getReader();

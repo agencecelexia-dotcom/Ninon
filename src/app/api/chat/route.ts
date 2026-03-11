@@ -154,13 +154,22 @@ export async function POST(request: Request) {
           );
           controller.close();
         } catch (error) {
-          const errMsg =
-            error instanceof Error ? error.message : "Unknown error";
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ type: "error", error: errMsg })}\n\n`
-            )
-          );
+          console.error("[SOLEIL API Error]", error);
+          let errMsg = "Unknown error";
+          if (error instanceof Anthropic.APIError) {
+            errMsg = `API Anthropic: ${error.status} — ${error.message}`;
+          } else if (error instanceof Error) {
+            errMsg = error.message;
+          }
+          try {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "error", error: errMsg })}\n\n`
+              )
+            );
+          } catch {
+            // Stream already closed
+          }
           controller.close();
         }
       },
