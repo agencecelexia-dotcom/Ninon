@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SOLEIL — Voyage piloté par Claude",
+  title: "SOLEIL — Planifie ton voyage parfait",
   description:
-    "Trouve, planifie et réserve ton voyage parfait avec l'IA Claude. Destinations off-track, meilleurs prix, itinéraires personnalisés.",
+    "Trouve, planifie et reserve ton voyage parfait avec l'IA. Destinations, vols, hotels, restos, activites — tout sur mesure.",
 };
 
 export default function RootLayout({
@@ -14,7 +14,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr">
-      <body className="font-nunito antialiased">
+      <body className="antialiased">
         {children}
       </body>
     </html>

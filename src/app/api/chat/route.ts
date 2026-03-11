@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import { SOLEIL_SYSTEM_PROMPT } from "@/lib/soleil-prompt";
+import { SOLEIL_SYSTEM_PROMPT, DESTINATION_PROMPT, OPTIONS_PROMPT } from "@/lib/soleil-prompt";
 import { MCP_TOOLS } from "@/lib/mcp-tools";
 import { handleToolCall } from "@/lib/mcp-handlers";
 
@@ -13,7 +13,7 @@ const anthropic = new Anthropic({
 // Simple in-memory rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT = 20;
-const RATE_WINDOW = 60_000; // 1 minute
+const RATE_WINDOW = 60_000;
 
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
@@ -25,6 +25,34 @@ function checkRateLimit(ip: string): boolean {
   if (entry.count >= RATE_LIMIT) return false;
   entry.count++;
   return true;
+}
+
+function buildUserPrompt(body: Record<string, unknown>): string {
+  const action = body.action as string | undefined;
+
+  if (action === "get_destinations") {
+    return DESTINATION_PROMPT(
+      (body.vibe as string) || "plage",
+      (body.budget as string) || "confort",
+      (body.travelers as number) || 2,
+      (body.dates as { from: string; to: string })?.from || "2026-06-01",
+      (body.dates as { from: string; to: string })?.to || "2026-06-07"
+    );
+  }
+
+  if (action === "get_options") {
+    return OPTIONS_PROMPT(
+      (body.destination as string) || "",
+      (body.country as string) || "",
+      (body.budget as string) || "confort",
+      (body.travelers as number) || 2,
+      (body.dates as { from: string; to: string })?.from || "2026-06-01",
+      (body.dates as { from: string; to: string })?.to || "2026-06-07"
+    );
+  }
+
+  // Legacy chat mode
+  return "";
 }
 
 export async function POST(request: Request) {
@@ -48,29 +76,35 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { messages } = await request.json();
+    const body = await request.json();
 
-    if (!messages || !Array.isArray(messages)) {
+    // Build messages based on request type
+    let formattedMessages: MessageParam[];
+
+    if (body.action) {
+      // Step-by-step wizard mode
+      const userPrompt = buildUserPrompt(body);
+      formattedMessages = [{ role: "user" as const, content: userPrompt }];
+    } else if (body.messages && Array.isArray(body.messages)) {
+      // Legacy chat mode
+      formattedMessages = body.messages.map(
+        (m: { role: string; content: string }) => ({
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })
+      );
+    } else {
       return new Response(
-        JSON.stringify({ error: "Messages array required" }),
+        JSON.stringify({ error: "Invalid request format" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
-
-    // Format messages for Anthropic API
-    const formattedMessages = messages.map(
-      (m: { role: string; content: string }) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })
-    );
 
     // Create SSE stream
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          // Initial call to Claude with tools
           let currentMessages: MessageParam[] = [...formattedMessages];
           let continueLoop = true;
 
@@ -83,13 +117,11 @@ export async function POST(request: Request) {
               tools: MCP_TOOLS,
             });
 
-            // Check if Claude wants to use tools
             const toolUseBlocks = response.content.filter(
               (block) => block.type === "tool_use"
             );
 
             if (toolUseBlocks.length > 0) {
-              // Process tool calls
               const toolResults = [];
               for (const toolBlock of toolUseBlocks) {
                 if (toolBlock.type === "tool_use") {
@@ -105,14 +137,12 @@ export async function POST(request: Request) {
                 }
               }
 
-              // Add assistant response and tool results to messages
               currentMessages = [
                 ...currentMessages,
                 { role: "assistant" as const, content: response.content as MessageParam["content"] },
                 { role: "user" as const, content: toolResults as MessageParam["content"] },
               ] as MessageParam[];
 
-              // Stream any text blocks that came with tool use
               for (const block of response.content) {
                 if (block.type === "text" && block.text) {
                   controller.enqueue(
@@ -121,18 +151,14 @@ export async function POST(request: Request) {
                 }
               }
 
-              // If stop_reason is "end_turn", we're done
               if (response.stop_reason === "end_turn") {
                 continueLoop = false;
               }
-              // Otherwise continue the loop for Claude to process tool results
             } else {
-              // No tool use — stream the final text response
               for (const block of response.content) {
                 if (block.type === "text") {
-                  // Send in chunks for streaming effect
                   const text = block.text;
-                  const chunkSize = 20;
+                  const chunkSize = 50;
                   for (let i = 0; i < text.length; i += chunkSize) {
                     const chunk = text.slice(i, i + chunkSize);
                     controller.enqueue(
@@ -140,8 +166,7 @@ export async function POST(request: Request) {
                         `data: ${JSON.stringify({ type: "text", text: chunk })}\n\n`
                       )
                     );
-                    // Small delay for streaming effect
-                    await new Promise((r) => setTimeout(r, 15));
+                    await new Promise((r) => setTimeout(r, 10));
                   }
                 }
               }
